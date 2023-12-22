@@ -40,7 +40,7 @@ def find_next_dir(base_dir: pathlib.Path) -> pathlib.Path:
     while next_dir.exists():
         d += 1
         next_dir = base_dir / str(d)
-    return
+    return next_dir
 
 
 def get_referer(args: Args, url: str):
@@ -51,13 +51,9 @@ def get_referer(args: Args, url: str):
 
 
 def main(args: Args):
-    dest = find_next_dir(args.dest)
+    dest = args.dest or find_next_dir(pathlib.Path('.'))
     logging.info(f"Downloading files to {dest}")
-    manager = DownloadManager(
-        output_directory=dest,
-        thread_count=args.threads,
-        use_content_disposition_header_for_filename=True,
-    )
+    dest.mkdir(parents=True, exist_ok=True)
 
     if args.url is not None:
         urls = generate_input_from_url(args.url, args.pad)
@@ -68,6 +64,13 @@ def main(args: Args):
                 urls.append(line.strip())
 
     logging.info(f"Downloading {len(urls)} items")
+
+    manager = DownloadManager(
+        output_directory=dest,
+        thread_count=args.threads,
+        skip_existing_files=True,
+        use_content_disposition_header_for_filename=True,
+    )
     for url in urls:
         manager.add_item_to_queue(DownloadItem(
             url,
@@ -80,7 +83,7 @@ def main(args: Args):
     manager.start()
     manager.wait_for_downloads_to_finish()
     if manager.failed_files:
-        with open(args.dest / 'failed.txt') as f:
+        with open(args.dest / 'failed.txt', 'w') as f:
             for failed in manager.failed_files:
                 logging.error(failed)
                 f.write(f'{failed.url}{os.linesep}')
@@ -95,7 +98,6 @@ if __name__ == '__main__':
                         "short expansions with. [0-10] becomes 00, 01, etc. "
                         "with a padding of \"0\". Defaults to no padding.")
     parser.add_argument("-d", "--dest", type=pathlib.Path,
-                        default=pathlib.Path('.'),
                         help="Destination to place the folder containing the "
                              "files.")
     parser.add_argument("-t", "--threads", default=1, type=int,
