@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 
 # This program can take a url in the form www.example.com/photo/pic[0-9].jpg
 # and expand it to 10 different urls or it will read a file containing a list
@@ -10,11 +10,15 @@
 #   Ranges can only be numbers, no letters in this version.
 #   A range from [0-10] translates to 00, 01, 02, etc.
 
+import re
 import sys
 import os
-import urllib2
-import Queue
+import os.path
+import urllib.request
+import urllib
+import queue
 import argparse
+from urllib.parse import urlparse, quote
 import threading
   
 parser = argparse.ArgumentParser(description = "Takes a url of the form "
@@ -28,12 +32,27 @@ parser.add_argument("-d", "--dest", default=".", help="Destination to place the"
 parser.add_argument("-t", "--threads", default = 1, type = int,
                     help = "Number of threads.")
 parser.add_argument("-q", "--quiet", action = "store_true")
+parser.add_argument("-r", "--referrer")
 group = parser.add_mutually_exclusive_group(required = True)
 group.add_argument("-u", "--url", help = "URL to expand")
 group.add_argument("-f", "--file", help = "File containing a list of URLs to "
                                           "download.")
                                           
 args = parser.parse_args()
+
+class DefaultRefererHandler(urllib.request.BaseHandler):
+  def http_request(self, req):
+    req.add_header("Referer", 
+      "{uri.scheme}://{uri.netloc}/".format(
+        uri=urlparse(req.get_full_url())))
+    return req
+
+opener = urllib.request.build_opener()
+opener.addheaders = [("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/45.0.2454.101 Chrome/45.0.2454.101 Safari/537.36")]
+if args.referrer is not None and len(args.referrer) > 0:
+  opener.addheaders.append(("Referer", args.referrer))
+else:
+  opener.add_handler(DefaultRefererHandler())
 
 def expand(url):
   parts = []
@@ -63,7 +82,7 @@ def expand(url):
 
 def get_next_dir(dest):
   d=0
-  while os.path.exists(str(d)):
+  while os.path.exists(os.path.join(dest, str(d))):
     d=d+1
   return str(d)
 destination_dir = os.path.join(args.dest, get_next_dir(args.dest))
@@ -74,23 +93,44 @@ def thread_work(files, dest_dir):
     url = files.get()
     try:
       if not args.quiet:
-        print "Downloading {} to {}".format(url, dest_dir)
+        print("Downloading {} to {}".format(url, dest_dir))
       try:
         filepath = os.path.join(destination_dir, url[url.rfind(os.sep):])
         filename = filepath[filepath.rfind(os.sep):]
-        request = urllib2.urlopen(url)
-        f = open(os.path.join(dest_dir) + filename, 'wb')
+        
+        request = opener.open(url)
+        if 'Content-Disposition' in request.info():
+          # If the response has Content-Disposition, we take file name from it
+          filename = request.info()['Content-Disposition'].split('filename=')[1]
+          if filename[0] == '"' or filename[0] == "'":
+            filename = filename[1:-1]
+        dest = os.path.join(dest_dir, quote(filename.replace("/", "")))
+        
+        while os.path.isfile(dest):
+          (base, ext) = os.path.splitext(dest)
+          match = re.match(".*-(\d+)", base)
+          if not match:
+            dest = base + "-1" + ext
+          else:
+            num_chars = match.group(1)
+            next_num = str(int(num_chars) + 1)
+            dest = base[:-len(num_chars)] + next_num + ext
+        f = open(dest, 'wb')
         f.write(request.read())
         f.close()
-      except urllib2.HTTPError as e:
+      except urllib.request.HTTPError as e:
         if e.code == 404:
-          print "404: {} does not exist on the server.".format(url)
+          print("404: {} does not exist on the server.".format(url))
+        else:
+          print(e)
+      except Exception as e:
+        print(e)
     finally:
       files.task_done()
   return
       
 
-files = Queue.Queue()
+files = queue.Queue()
 
 if args.url:
   for url in expand(args.url):
